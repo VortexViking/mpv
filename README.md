@@ -20,6 +20,7 @@
 
 
 * [Wiki](https://github.com/mpv-player/mpv/wiki)
+* [User Scripts](https://github.com/mpv-player/mpv/wiki#user-scripts)
 * [FAQ][FAQ]
 * [Manual](https://mpv.io/manual/master/)
 

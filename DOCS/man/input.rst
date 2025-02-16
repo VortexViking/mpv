@@ -731,7 +731,7 @@ Text Manipulation
     used only through the client API or from a script using
     ``mp.command_native``. (see `Property Expansion`_).
 
-``expand-path "<text>"``
+``expand-path <text>``
     Expand a path's double-tilde placeholders into a platform-specific path.
     As ``expand-text``, this can only be used through the client API or from
     a script using ``mp.command_native``.
@@ -2563,9 +2563,10 @@ Property list
 ``ao-volume`` (RW)
     System volume. This property is available only if mpv audio output is
     currently active, and only if the underlying implementation supports volume
-    control. What this option does depends on the API. For example, on ALSA
-    this usually changes system-wide audio, while with PulseAudio this controls
-    per-application volume.
+    control. What this option does, or how the value is interpreted depends on
+    the API. For example, on ALSA this usually changes system-wide audio volume
+    on a linear curve, while with PulseAudio this controls per-application volume
+    on a cubic curve.
 
 ``ao-mute`` (RW)
     Similar to ``ao-volume``, but controls the mute state. May be unimplemented
@@ -3883,7 +3884,7 @@ Property list
 
     This has a number of sub-properties. Replace ``<name>`` with the name of
     a top-level option. No guarantee of stability is given to any of these
-    sub-properties - they may change radically in the feature.
+    sub-properties - they may change radically in the future.
 
     ``option-info/<name>/name``
         The name of the option.

@@ -528,7 +528,7 @@ static bool append_lang(size_t *nb, char ***out, char *in)
     MP_TARRAY_GROW(NULL, *out, *nb + 1);
     (*out)[(*nb)++] = in;
     (*out)[*nb] = NULL;
-    ta_set_parent(in, *out);
+    talloc_steal(*out, in);
     return true;
 }
 
@@ -906,7 +906,7 @@ int mp_add_external_file(struct MPContext *mpctx, char *filename,
         } else {
             t->title = talloc_strdup(t, mp_basename(disp_filename));
         }
-        t->external_filename = talloc_strdup(t, filename);
+        t->external_filename = mp_normalize_user_path(t, mpctx->global, filename);
         t->no_default = sh->type != filter;
         t->no_auto_select = t->no_default;
         // if we found video, and we are loading cover art, flag as such.

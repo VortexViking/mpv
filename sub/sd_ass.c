@@ -316,7 +316,7 @@ static int init(struct sd *sd)
     ctx->packer = mp_ass_packer_alloc(ctx);
 
     // Subtitles does not have any profile value, so put the converted type as a profile.
-    const char **desc = ctx->converter ? &sd->codec->codec_profile : &sd->codec->codec_desc;
+    const char *_Atomic *desc = ctx->converter ? &sd->codec->codec_profile : &sd->codec->codec_desc;
     switch (ctx->ass_track->track_type) {
     case TRACK_TYPE_ASS:
         *desc = "Advanced Sub Station Alpha";
@@ -1028,7 +1028,7 @@ static int control(struct sd *sd, enum sd_ctrl cmd, void *arg)
         ctx->video_params = *(struct mp_image_params *)arg;
         return CONTROL_OK;
     case SD_CTRL_UPDATE_OPTS: {
-        int flags = (uintptr_t)arg;
+        uint64_t flags = *(uint64_t *)arg;
         if (flags & UPDATE_SUB_FILT) {
             filters_destroy(sd);
             filters_init(sd);

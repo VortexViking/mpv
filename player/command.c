@@ -2000,9 +2000,6 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
     struct MPContext *mpctx = ctx;
     struct track *track = mpctx->tracks[item];
 
-    char *external_filename = mp_normalize_user_path(NULL, mpctx->global,
-                                                     track->external_filename);
-
     struct mp_codec_params p =
         track->stream ? *track->stream->codec : (struct mp_codec_params){0};
 
@@ -2054,8 +2051,8 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
         {"external",    SUB_PROP_BOOL(track->is_external)},
         {"selected",    SUB_PROP_BOOL(track->selected)},
         {"main-selection", SUB_PROP_INT(order), .unavailable = order < 0},
-        {"external-filename", SUB_PROP_STR(external_filename),
-                        .unavailable = !external_filename},
+        {"external-filename", SUB_PROP_STR(track->external_filename),
+                        .unavailable = !track->external_filename},
         {"ff-index",    SUB_PROP_INT(track->ff_index)},
         {"hls-bitrate", SUB_PROP_INT(track->hls_bitrate),
                         .unavailable = !track->hls_bitrate},
@@ -2113,15 +2110,15 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
             bstr key = {0};
             char *rem = "";
             m_property_split_path(ka->key, &key, &rem);
-            ka->key = !rem[0] ? "metadata" : rem;
-            if (rem[0]) {
-                if (!tags || tags->num_keys == 0) {
-                    ret = M_PROPERTY_UNAVAILABLE;
-                } else {
-                    ret = tag_property(action, (void *)ka, tags);
-                }
-                goto done;
+            ka->key = rem;
+            if (!rem[0]) {
+                ret = M_PROPERTY_ERROR;
+            } else if (!tags || tags->num_keys == 0) {
+                ret = M_PROPERTY_UNAVAILABLE;
+            } else {
+                ret = tag_property(action, (void *)ka, tags);
             }
+            goto done;
         }
         MP_FALLTHROUGH;
     default:
@@ -2129,7 +2126,6 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
     }
 
 done:
-    talloc_free(external_filename);
     talloc_free(tag_list);
     return ret;
 }
@@ -2290,7 +2286,7 @@ static int mp_property_current_tracks(void *ctx, struct m_property *prop,
     }
     assert(index >= 0);
 
-    char *name = mp_tprintf(80, "track-list/%d/%s", index, rem);
+    char *name = mp_tprintf(80, "track-list/%d%s%s", index, *rem ? "/" : "", rem);
     return mp_property_do(name, ka->action, ka->arg, ctx);
 }
 
@@ -2450,10 +2446,10 @@ static int property_imgparams(const struct mp_image_params *p, int action, void 
         {"crop-y",          SUB_PROP_INT(p->crop.y0), .unavailable = !has_crop},
         {"crop-w",          SUB_PROP_INT(mp_rect_w(p->crop)), .unavailable = !has_crop},
         {"crop-h",          SUB_PROP_INT(mp_rect_h(p->crop)), .unavailable = !has_crop},
-        {"aspect",          SUB_PROP_FLOAT(d_w / (double)d_h)},
+        {"aspect",          SUB_PROP_DOUBLE(d_w / (double)d_h)},
         {"aspect-name",     SUB_PROP_STR(aspect_name), .unavailable = !aspect_name},
-        {"par",             SUB_PROP_FLOAT(p->p_w / (double)p->p_h)},
-        {"sar",             SUB_PROP_FLOAT(p->w / (double)p->h)},
+        {"par",             SUB_PROP_DOUBLE(p->p_w / (double)p->p_h)},
+        {"sar",             SUB_PROP_DOUBLE(p->w / (double)p->h)},
         {"sar-name",        SUB_PROP_STR(sar_name), .unavailable = !sar_name},
         {"colormatrix",
             SUB_PROP_STR(m_opt_choice_str(pl_csp_names, p->repr.sys))},
@@ -4673,7 +4669,7 @@ static const struct property_osd_display {
     const char *msg;
 } property_osd_display[] = {
     // general
-    {"loop-playlist", "Loop"},
+    {"loop-playlist", "Loop playlist"},
     {"loop-file", "Loop current file"},
     {"chapter",
      .seek_msg = OSD_SEEK_INFO_CHAPTER_TEXT,
@@ -7688,13 +7684,12 @@ static void update_track_switch(struct MPContext *mpctx, int order, int type)
     mp_wakeup_core(mpctx);
 }
 
-void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags,
+void mp_option_change_callback(void *ctx, struct m_config_option *co, uint64_t flags,
                                bool self_update)
 {
     struct MPContext *mpctx = ctx;
     struct MPOpts *opts = mpctx->opts;
-    bool init = !co;
-    void *opt_ptr = init ? NULL : co->data; // NULL on start
+    void *opt_ptr = !co ? NULL : co->data; // NULL on start
 
     if (co)
         mp_notify_property(mpctx, co->name);
@@ -7704,6 +7699,35 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags,
     if (self_update)
         return;
 
+    // Coalesce redundant updates and only keep the newest one.
+    bool drop = false;
+    for (int i = 0; i < mpctx->num_option_callbacks; i++) {
+        if ((mpctx->option_callbacks[i].co && opt_ptr == mpctx->option_callbacks[i].co->data) ||
+            (flags && flags == mpctx->option_callbacks[i].flags))
+            drop = true;
+        if (!drop)
+            continue;
+        if (i < mpctx->num_option_callbacks - 1)
+            mpctx->option_callbacks[i] = mpctx->option_callbacks[i + 1];
+        if (i == mpctx->num_option_callbacks - 1) {
+            mpctx->option_callbacks[i].co = co;
+            mpctx->option_callbacks[i].flags = flags;
+        }
+    }
+
+    if (!drop) {
+        struct mp_option_callback callback = {.co = co, .flags = flags};
+        MP_TARRAY_APPEND(mpctx, mpctx->option_callbacks, mpctx->num_option_callbacks, callback);
+    }
+}
+
+void mp_option_run_callback(struct MPContext *mpctx, int index)
+{
+    struct MPOpts *opts = mpctx->opts;
+    struct m_config_option *co = mpctx->option_callbacks[index].co;
+    void *opt_ptr = co ? co->data : NULL;
+    int flags = mpctx->option_callbacks[index].flags;
+
     if (flags & UPDATE_TERM)
         mp_update_logging(mpctx, false);
 
@@ -7712,8 +7736,7 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags,
             struct track *track = mpctx->current_track[n][STREAM_SUB];
             struct dec_sub *sub = track ? track->d_sub : NULL;
             if (sub) {
-                int ret = sub_control(sub, SD_CTRL_UPDATE_OPTS,
-                                      (void *)(uintptr_t)flags);
+                int ret = sub_control(sub, SD_CTRL_UPDATE_OPTS, &flags);
                 if (ret == CONTROL_OK && flags & (UPDATE_SUB_FILT | UPDATE_SUB_HARD)) {
                     sub_redecode_cached_packets(sub);
                     sub_reset(sub);
@@ -7747,7 +7770,7 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags,
     if (flags & UPDATE_SUB_EXTS)
         mp_update_subtitle_exts(mpctx->opts);
 
-    if (init || opt_ptr == &opts->ipc_path || opt_ptr == &opts->ipc_client) {
+    if (opt_ptr == &opts->ipc_path || opt_ptr == &opts->ipc_client) {
         mp_uninit_ipc(mpctx->ipc_ctx);
         mpctx->ipc_ctx = mp_init_ipc(mpctx->clients, mpctx->global);
     }
